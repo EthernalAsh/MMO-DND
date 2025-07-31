@@ -1,0 +1,16 @@
+struct BiomeStruct
+{
+    int biomeID;
+    
+    float noiseScale;
+    float frequency;
+    int octaves;
+    float amplitude;
+};
+
+struct BiomeVoxelStruct
+{
+    int biomeID;
+    int voxelID;
+    int voxelDepth;
+};

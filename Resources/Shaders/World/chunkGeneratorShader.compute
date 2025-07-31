@@ -1,0 +1,162 @@
+#pragma kernel GenerateChunk
+
+#include "Includes/WorldSettings.compute"
+#include "Includes/FastNoiseLite.compute"
+#include "Includes/Voxel.compute"
+//#include "Includes/Biome.compute"
+
+struct BiomeStruct
+{
+    int biomeID;
+    
+    float tempeture;
+    float humidity;
+    
+    float noiseScale;
+    float frequency;
+    int octaves;
+    float amplitude;
+};
+
+struct BiomeVoxelStruct
+{
+    int biomeID;
+    int voxelID;
+    int voxelDepth;
+};
+
+int3 worldPosition;
+RWStructuredBuffer<VoxelStruct> chunkVoxelsBuffer;
+
+// Voxel
+int voxelBufferSize;
+RWStructuredBuffer<VoxelStruct> voxelsBuffer;
+int GetVoxelBufferIndex(int voxelID)
+{
+    for (int i = 0; i < voxelBufferSize; i++)
+    {
+        if (voxelsBuffer[i].voxelID == voxelID)
+        {
+            return i;
+        }
+    }
+    
+    return 0;
+}
+
+float GenerateNoise(int x, int z, float noiseScale, float frequency, int octaves, float amplitude = 1)
+{
+    fnl_state noise = fnlCreateState();
+    noise.noise_type = FNL_NOISE_OPENSIMPLEX2;
+    noise.fractal_type = FNL_FRACTAL_RIDGED;
+    noise.frequency = .5;
+    noise.octaves = 5;
+    
+    float noiseValue = fnlGetNoise2D(noise, x * noiseScale, z * noiseScale) * amplitude;
+    return noiseValue;
+}
+
+// Biome
+int biomeBufferSize;
+RWStructuredBuffer<BiomeStruct> biomeBuffer;
+float GetValueFromPosition(int3 offsetID, float noiseScale)
+{
+    return GenerateNoise (offsetID.x, offsetID.y, noiseScale, .5, 5);
+}
+
+BiomeStruct GetBiome(int3 offsetID)
+{
+    float tempeture = GetValueFromPosition(offsetID + 1000, .00001); // 0 - 1
+    float humidty = GetValueFromPosition(offsetID - 1500, .000025);
+    
+    BiomeStruct biome = biomeBuffer[0];
+    float minDistance = 1000000;
+    for (int i = 0; i < biomeBufferSize; i++)
+    {
+        float distance = 0;
+        distance += abs(tempeture - biomeBuffer[i].tempeture);
+        distance += abs(humidty - biomeBuffer[i].humidity);
+        
+        if(distance < minDistance)
+        {
+            minDistance = distance;
+            biome = biomeBuffer[i];
+        }
+    }
+    
+    return biome;
+}
+
+// Noise
+
+float2 GenerateDomainOffset(int x, int z)
+{
+    float noiseX = GenerateNoise(x, z, .003, .5, 2, 500);
+    float noiseY = GenerateNoise(x, z, .005, .5, 2, 500);
+    return float2(noiseX, noiseY);
+}
+
+float GenerateDomainNoise(int x, int z, BiomeStruct biome)
+{
+    float2 domainOffset = GenerateDomainOffset(x, z);
+    return GenerateNoise(x + domainOffset.x, z + domainOffset.y, biome.noiseScale, biome.frequency, biome.octaves, biome.amplitude);
+}
+
+int GetGenerationHeightFromBiome(int x, int z, BiomeStruct biome)
+{
+    return GenerateDomainNoise(x, z, biome);
+}
+
+// BiomeVoxel
+int biomeVoxelBufferSize;
+RWStructuredBuffer<BiomeVoxelStruct> biomeVoxelBuffer;
+int GetVoxelForBiome(int maxHeight, int y, int biomeID)
+{
+    if (y > maxHeight)
+    {
+        return 1;
+    }
+    
+    int voxelID = 0;
+    int currentDepth = maxHeight - y;
+    int difference = 100000;
+    for (int i = 0; i < biomeVoxelBufferSize; i++)
+    {
+        BiomeVoxelStruct biomeVoxel = biomeVoxelBuffer[i];
+        
+        if (biomeVoxel.biomeID == biomeID)
+        {
+            int currentDifference = currentDepth - biomeVoxel.voxelDepth;
+            if (currentDifference < difference && currentDifference >= 0)
+            {
+                difference = currentDifference;
+                voxelID = biomeVoxel.voxelID;
+            }
+        }
+    }
+    
+    return voxelID;
+}
+
+[numthreads(numberOfThreads, numberOfThreads, numberOfThreads)]
+void GenerateChunk (uint3 id : SV_DispatchThreadID)
+{
+    int index = IndexFromCoord(id.x, id.y, id.z);
+    int3 offsetID = ((int3)id) + worldPosition;
+    
+    // Decide which biome to use
+    BiomeStruct biome = GetBiome(offsetID);
+    
+    // Get a value from out biome gen
+    int generationHeight = GetGenerationHeightFromBiome(ceil(offsetID.x * voxelSize), ceil(offsetID.z * voxelSize), biome);
+    //int generationHeight = GetGenerationHeightFromBiome(offsetID.x, offsetID.z, biome);
+    
+    
+    // Decide which voxel to place on this position
+    int voxelID = 0;
+    voxelID = GetVoxelForBiome(generationHeight, offsetID.y, biome.biomeID);
+    
+    // Do some extra stuff to add extra details like ores or stuff...
+    
+    chunkVoxelsBuffer[index] = voxelsBuffer[GetVoxelBufferIndex(voxelID)];
+}

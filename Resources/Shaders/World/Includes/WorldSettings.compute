@@ -1,0 +1,21 @@
+static const uint numberOfThreads = 8;
+
+float voxelSize;
+int feetInChunk;
+
+int TotalVoxelsInAxis()
+{
+    return (int) (feetInChunk / voxelSize);
+}
+
+int IndexFromCoord(int x, int y, int z)
+{
+    int totalVoxelsInAxis = (int) (feetInChunk / voxelSize);
+    return x + totalVoxelsInAxis * (y + totalVoxelsInAxis * z);
+}
+
+int IndexFromCoordWithNeighbours(int x, int y, int z)
+{
+    int totalVoxelsInAxis = (int) (feetInChunk / voxelSize) + 2;
+    return (x + 1) + totalVoxelsInAxis * ((y + 1) + totalVoxelsInAxis * (z + 1));
+}

@@ -1,0 +1,118 @@
+#pragma kernel GenerateChunkMesh
+
+#include "Includes/WorldSettings.compute"
+#include "Includes/Voxel.compute"
+
+RWStructuredBuffer<VoxelStruct> chunkVoxelsBuffer;
+
+struct Triangle
+{
+    float3 a;
+    float3 b;
+    float3 c;
+    
+    float3 uvA;
+    float3 uvB;
+    float3 uvC;
+};
+
+AppendStructuredBuffer<Triangle> trianglesBuffer;
+
+float2 GetTriplanarUV(float3 worldPos, int direction)
+{
+    float2 uv;
+    switch (direction)
+    {
+        case 0: // Left  (-X)
+        case 1: // Right (+X)
+            uv = worldPos.yz;
+            break;
+
+        case 2: // Down  (-Y)
+        case 3: // Up    (+Y)
+            uv = worldPos.xz;
+            break;
+
+        case 4: // Backward (-Z)
+        case 5: // Forward (+Z)
+            uv = worldPos.xy;
+            break;
+    }
+    
+    return uv / voxelSize; // Scale UVs to voxel size
+}
+
+void AddFace(VoxelStruct currentVoxel, int direction, float x, float y, float z)
+{
+    float3 center = float3(x, y, z);
+    float3 offsets[6][4] =
+    {
+        { float3(-.5, -.5, +.5), float3(-.5, +.5, +.5), float3(-.5, +.5, -.5), float3(-.5, -.5, -.5) }, // Left
+        { float3(+.5, -.5, -.5), float3(+.5, +.5, -.5), float3(+.5, +.5, +.5), float3(+.5, -.5, +.5) }, // Right
+        { float3(-.5, -.5, -.5), float3(+.5, -.5, -.5), float3(+.5, -.5, +.5), float3(-.5, -.5, +.5) }, // Down
+        { float3(-.5, +.5, +.5), float3(+.5, +.5, +.5), float3(+.5, +.5, -.5), float3(-.5, +.5, -.5) }, // Up
+        { float3(-.5, -.5, -.5), float3(-.5, +.5, -.5), float3(+.5, +.5, -.5), float3(+.5, -.5, -.5) }, // Back
+        { float3(+.5, -.5, +.5), float3(+.5, +.5, +.5), float3(-.5, +.5, +.5), float3(-.5, -.5, +.5) }, // Forward
+    };
+
+    float3 p0 = (center + offsets[direction][0]) * voxelSize;
+    float3 p1 = (center + offsets[direction][1]) * voxelSize;
+    float3 p2 = (center + offsets[direction][2]) * voxelSize;
+    float3 p3 = (center + offsets[direction][3]) * voxelSize;
+
+    Triangle tri1;
+    tri1.a = p0;
+    tri1.b = p1;
+    tri1.c = p2;
+
+    tri1.uvA = float3(GetTriplanarUV(p0, direction), currentVoxel.voxelID);
+    tri1.uvB = float3(GetTriplanarUV(p1, direction), currentVoxel.voxelID);
+    tri1.uvC = float3(GetTriplanarUV(p2, direction), currentVoxel.voxelID);
+
+    trianglesBuffer.Append(tri1);
+
+    Triangle tri2;
+    tri2.a = p0;
+    tri2.b = p2;
+    tri2.c = p3;
+
+    tri2.uvA = tri1.uvA;
+    tri2.uvB = tri1.uvC;
+    tri2.uvC = float3(GetTriplanarUV(p3, direction), currentVoxel.voxelID);
+
+    trianglesBuffer.Append(tri2);
+}
+
+void CheckNeighbour(VoxelStruct currentVoxel, int3 newID, int3 offset, int faceToAdd)
+{
+    int3 neighbourPositition = newID + offset;
+    
+    int neighbourIndex = IndexFromCoordWithNeighbours(neighbourPositition.x, neighbourPositition.y, neighbourPositition.z);
+    VoxelStruct neighbourVoxel = chunkVoxelsBuffer[neighbourIndex];
+    
+    if (neighbourVoxel.voxelID != 0 && neighbourVoxel.isSolid == 0)
+    {
+        AddFace(currentVoxel, faceToAdd, newID.x, newID.y, newID.z);
+    }
+}
+
+[numthreads(numberOfThreads, numberOfThreads, numberOfThreads)]
+void GenerateChunkMesh(uint3 id : SV_DispatchThreadID)
+{
+    int3 newID = id;
+    
+    int currentVoxelIndex = IndexFromCoordWithNeighbours(newID.x, newID.y, newID.z);
+    VoxelStruct currentVoxel = chunkVoxelsBuffer[currentVoxelIndex];
+    
+    if (currentVoxel.voxelID == 0 || currentVoxel.voxelID == 1)
+    {
+        return;
+    }
+    
+    CheckNeighbour(currentVoxel, newID, int3(-1, 0, 0), 0);
+    CheckNeighbour(currentVoxel, newID, int3(1, 0, 0), 1);
+    CheckNeighbour(currentVoxel, newID, int3(0, -1, 0), 2);
+    CheckNeighbour(currentVoxel, newID, int3(0, 1, 0), 3);
+    CheckNeighbour(currentVoxel, newID, int3(0, 0, -1), 4);
+    CheckNeighbour(currentVoxel, newID, int3(0, 0, 1), 5);
+}
